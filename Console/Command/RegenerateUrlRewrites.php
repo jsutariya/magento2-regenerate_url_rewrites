@@ -4,11 +4,17 @@
  *
  * @package OlegKoval_RegenerateUrlRewrites
  * @author Oleg Koval <contact@olegkoval.com>
- * @copyright 2017 Oleg Koval
+ * @copyright 2018 Oleg Koval
  * @license OSL-3.0, AFL-3.0
  */
 
 namespace OlegKoval\RegenerateUrlRewrites\Console\Command;
+
+if (class_exists('\OlegKoval\RegenerateUrlRewrites\Console\Command\RegenerateUrlRewritesPro')) {
+    abstract class RegenerateUrlRewritesLayer extends RegenerateUrlRewritesPro {}
+} else {
+    abstract class RegenerateUrlRewritesLayer extends RegenerateUrlRewritesAbstract {}
+}
 
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -16,85 +22,17 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-class RegenerateUrlRewrites extends Command
+class RegenerateUrlRewrites extends RegenerateUrlRewritesLayer
 {
-    const INPUT_KEY_STOREID = 'storeId';
-    const INPUT_KEY_SAVE_REWRITES_HISTORY = 'save-old-urls';
-    const INPUT_KEY_NO_REINDEX = 'no-reindex';
+    /**
+     * @var null|Symfony\Component\Console\Input\InputInterface
+     */
+    protected $_input = null;
 
     /**
-     * @var \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory
+     * @var null|Symfony\Component\Console\Output\OutputInterface
      */
-    protected $_categoryCollectionFactory;
-
-    /**
-     * @var \Magento\Catalog\Helper\Category
-     */
-    protected $_categoryHelper;
-
-    /**
-     * @var \Magento\Store\Model\StoreManagerInterface
-     */
-    protected $_storeManager;
-
-    /**
-     * @var \Magento\Framework\App\State $appState
-     */
-     protected $_appState;
-
-    /**
-     * Constructor of RegenerateUrlRewrites
-     *
-     * @param \Magento\Framework\App\ResourceConnection $resource
-     * @param \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory $categoryCollectionFactory
-     * @param \Magento\Catalog\Helper\Category $categoryHelper
-     */
-    public function __construct(
-        \Magento\Framework\App\ResourceConnection $resource,
-        \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory $categoryCollectionFactory,
-        \Magento\Catalog\Helper\Category $categoryHelper,
-        \Magento\Framework\App\State $appState
-    ) {
-        $this->_resource = $resource;
-        $this->_categoryCollectionFactory = $categoryCollectionFactory;
-        $this->_categoryHelper = $categoryHelper;
-        $this->_appState = $appState;
-        parent::__construct();
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    protected function configure()
-    {
-        $this->setName('ok:urlrewrites:regenerate')
-            ->setDescription('Regenerate Url rewrites of products/categories')
-            ->setDefinition([
-                new InputArgument(
-                    self::INPUT_KEY_STOREID,
-                    InputArgument::OPTIONAL,
-                    '5'
-                ),
-                new InputOption(
-                    self::INPUT_KEY_STOREID,
-                    null,
-                    InputArgument::OPTIONAL,
-                    'Specific store id'
-                ),
-                new InputOption(
-                    self::INPUT_KEY_SAVE_REWRITES_HISTORY,
-                    null,
-                    InputOption::VALUE_NONE,
-                    'Save current URL Rewrites'
-                ),
-                new InputOption(
-                    self::INPUT_KEY_NO_REINDEX,
-                    null,
-                    InputOption::VALUE_NONE,
-                    'Do not run reindex when URL rewrites are generated.'
-                 )
-            ]);
-    }
+    protected $_output = null;
 
     /**
      * Regenerate Url Rewrites
@@ -105,54 +43,20 @@ class RegenerateUrlRewrites extends Command
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         set_time_limit(0);
-        $saveOldUrls = false;
-        $runReindex = true;
-        $allStores = $this->getAllStoreIds();
-        $storesList = [];
-        $output->writeln('Regenerating of URL rewrites:');
+        $this->_input = $input;
+        $this->_output = $output;
 
+        $this->_output->writeln('Regenerating of URL rewrites:');
+        $this->_showSupportMe();
+        $this->getCommandOptions();
 
-        $options = $input->getOptions();
-        if (isset($options['save-old-urls']) && $options['save-old-urls'] === true) {
-            $saveOldUrls = true;
-        }
-
-        if (isset($options[self::INPUT_KEY_NO_REINDEX]) && $options[self::INPUT_KEY_NO_REINDEX] === true) {
-            $runReindex = false;
-        }
-
-        // get store Id (if was set)
-        $storeId = $input->getArgument(self::INPUT_KEY_STOREID);
-        if (is_null($storeId)) {
-            $storeId = $input->getOption(self::INPUT_KEY_STOREID);
-        }
-
-        // if store ID is not specified the re-generate for all stores
-        if (is_null($storeId)) {
-            $storesList = $allStores;
-        }
-        // we will re-generate URL only in this specific store (if it exists)
-        elseif (strlen($storeId) && ctype_digit($storeId)) {
-            if (isset($allStores[$storeId])) {
-                $storesList = array(
-                    $storeId => $allStores[$storeId]
-                );
-            } else {
-                $this->displayError($output, 'ERROR: store with this ID not exists.');
-                return;
+        if (count($this->_errors) > 0) {
+            foreach ($this->_errors as $error) {
+                $this->_displayConsoleMsg($error);
             }
-        }
-        // disaply error if user set some incorrect value
-        else {
-            $this->displayError($output, 'ERROR: store ID should have a integer value.', true);
             return;
         }
 
-        // remove all current url rewrites
-        if (count($storesList) > 0 && !$saveOldUrls) {
-            $this->removeAllUrlRewrites($storesList);
-        }
-        
         // set area code if needed
         try {
             $areaCode = $this->_appState->getAreaCode();
@@ -161,111 +65,207 @@ class RegenerateUrlRewrites extends Command
             $this->_appState->setAreaCode('adminhtml');
         }
 
-        foreach ($storesList as $storeId => $storeCode) {
-            $output->writeln('');
-            $output->writeln("[Store ID: {$storeId}, Store View code: {$storeCode}]:");
-            $step = 0;
+        // remove current url rewrites
+        if (count($this->_commandOptions['storesList']) > 0 && !$this->_commandOptions['saveOldUrls']) {
+            $this->_removeAllUrlRewrites($this->_commandOptions['storesList'], $this->_commandOptions['productsFilter']);
+        }
 
-            // get categories collection
-            $categories = $this->_categoryCollectionFactory->create()
-                ->addAttributeToSelect('*')
-                ->setStore($storeId)
-                ->addFieldToFilter('level', array('gt' => '1'))
-                ->setOrder('level', 'DESC');
+        foreach ($this->_commandOptions['storesList'] as $storeId => $storeCode) {
+            $this->_output->writeln('');
+            $this->_output->writeln("[Store ID: {$storeId}, Store View code: {$storeCode}]:");
 
-            foreach ($categories as $category) {
-                try {
-                    // we use save() action to start all before/after 'save' events (includes a regenerating of url rewrites)
-                    // and we set orig "url_key" as empty to pass checks if data was updated
-                    $category->setStoreId($storeId);
-                    $category->setOrigData('url_key', '');
-                    if ($saveOldUrls) {
-                        $category->setData('save_rewrites_history', true);
-                    }
-                    $category->save();
-
-                    $step++;
-                    $output->write('.');
-                    if ($step > 19) {
-                        $output->writeln('');
-                        $step = 0;
-                    }
-                } catch (\Exception $e) {
-                    // debugging
-                    $output->writeln($e->getMessage());
-                }
+            if (count($this->_commandOptions['categoriesFilter']) > 0) {
+                $this->regenerateCategoriesRangeUrlRewrites(
+                    $this->_commandOptions['categoriesFilter'],
+                    $storeId
+                );
+            } elseif (count($this->_commandOptions['productsFilter']) > 0) {
+                $this->regenerateProductsRangeUrlRewrites(
+                    $this->_commandOptions['productsFilter'],
+                    $storeId
+                );
+            } elseif (!empty($this->_commandOptions['categoryId'])) {
+                $this->regenerateSpecificCategoryUrlRewrites(
+                    $this->_commandOptions['categoryId'],
+                    $storeId
+                );
+            } elseif (!empty($this->_commandOptions['productId'])) {
+                $this->regenerateSpecificProductUrlRewrites(
+                    $this->_commandOptions['productId'],
+                    $storeId
+                );
+            } else {
+                $this->regenerateAllUrlRewrites($storeId);
             }
         }
 
-        $output->writeln('');
-        $output->writeln('');
+        $this->_output->writeln('');
+        $this->_output->writeln('');
 
-        if ($runReindex == true) {
-            $output->writeln('Reindexation...');
+        if ($this->_commandOptions['runReindex'] == true) {
+            $this->_output->write('Reindexation...');
             shell_exec('php bin/magento indexer:reindex');
+            $this->_output->writeln(' Done');
         }
 
-        $output->writeln('Cache refreshing...');
-        shell_exec('php bin/magento cache:clean');
-        shell_exec('php bin/magento cache:flush');
-        $output->writeln('Finished');
-    }
-
-    /**
-     * Remove all current Url rewrites of categories/products from DB
-     * Use a sql queries to speed up
-     *
-     * @param array $storesList
-     * @return void
-     */
-    public function removeAllUrlRewrites($storesList) {
-        $storeIds = implode(',', array_keys($storesList));
-        $sql = "DELETE FROM {$this->_resource->getTableName('url_rewrite')} WHERE `entity_type` IN ('category', 'product') AND `store_id` IN ({$storeIds});";
-        $this->_resource->getConnection()->query($sql);
-
-        $sql = "DELETE FROM {$this->_resource->getTableName('catalog_url_rewrite_product_category')} WHERE `url_rewrite_id` NOT IN (
-            SELECT `url_rewrite_id` FROM {$this->_resource->getTableName('url_rewrite')}
-        );";
-        $this->_resource->getConnection()->query($sql);
-    }
-
-    /**
-     * Get list of all stores id/code
-     *
-     * @return array
-     */
-    public function getAllStoreIds() {
-        $result = [];
-
-        $sql = $this->_resource->getConnection()->select()
-                    ->from($this->_resource->getTableName('store'), array('store_id', 'code'))
-                    ->order('store_id', 'ASC');
-
-        $queryResult = $this->_resource->getConnection()->fetchAll($sql);
-
-        foreach ($queryResult as $row) {
-            $result[(int)$row['store_id']] = $row['code'];
+        if ($this->_commandOptions['runCacheClean'] || $this->_commandOptions['runCacheFlush']) {
+            $this->_output->write('Cache refreshing...');
+            if ($this->_commandOptions['runCacheClean']) {
+                shell_exec('php bin/magento cache:clean');
+            }
+            if ($this->_commandOptions['runCacheFlush']) {
+                shell_exec('php bin/magento cache:flush');
+            }
+            $this->_output->writeln(' Done');
+            $this->_output->writeln('If you use some external cache mechanisms (e.g.: Redis, Varnish, etc.) - please, refresh this external cache.');
         }
 
-        return $result;
+        $this->_showSupportMe();
+        $this->_output->writeln('Finished');
     }
 
     /**
-     * Display error message
-     * @param  OutputInterface  $output
-     * @param  string  $errorMsg
-     * @param  boolean $displayHint
-     * @return void
+     * @see parent::regenerateAllUrlRewrites()
      */
-    private function displayError(&$output, $errorMsg, $displayHint = false)
+    public function regenerateAllUrlRewrites($storeId = 0)
     {
-        $output->writeln('');
-        $output->writeln($errorMsg);
+        $this->_step = 0;
 
-        if ($displayHint) {
-            $output->writeln('Correct command is: bin/magento ok:urlrewrites:regenerate 19');
+        // get categories collection
+        $categories = $this->_getCategoriesCollection($storeId);
+
+        $pageCount = $categories->getLastPageNumber();
+        $currentPage = 1;
+        while ($currentPage <= $pageCount) {
+            $categories->setCurPage($currentPage);
+
+            foreach ($categories as $category) {
+                $this->_categoryProcess($category, $storeId);
+            }
+
+            $categories->clear();
+            $currentPage++;
+        }
+    }
+
+    /**
+     * @see parent::getCommandOptions()
+     */
+    public function getCommandOptions()
+    {
+        $options = $this->_input->getOptions();
+        $allStores = $this->_getAllStoreIds();
+
+        // default values
+        $this->_commandOptions['saveOldUrls'] = false;
+        $this->_commandOptions['runReindex'] = true;
+        $this->_commandOptions['protectOutOfMemory'] = false;
+        $this->_commandOptions['storesList'] = [];
+        $this->_commandOptions['showProgress'] = true;
+        $this->_commandOptions['runCacheClean'] = true;
+        $this->_commandOptions['runCacheFlush'] = true;
+        $this->_commandOptions['cleanUrlKey'] = true;
+        $this->_commandOptions['categoriesFilter'] = [];
+        $this->_commandOptions['productsFilter'] = [];
+        $this->_commandOptions['categoryId'] = null;
+        $this->_commandOptions['productId'] = null;
+        $distinctOptionsUsed = 0;
+
+        if (isset($options[self::INPUT_KEY_SAVE_REWRITES_HISTORY]) && $options[self::INPUT_KEY_SAVE_REWRITES_HISTORY] === true) {
+            $this->_commandOptions['saveOldUrls'] = true;
         }
 
-        $output->writeln('Finished');
+        if (isset($options[self::INPUT_KEY_NO_REINDEX]) && $options[self::INPUT_KEY_NO_REINDEX] === true) {
+            $this->_commandOptions['runReindex'] = false;
+        }
+
+        if (isset($options[self::INPUT_KEY_NO_PROGRESS]) && $options[self::INPUT_KEY_NO_PROGRESS] === true) {
+            $this->_commandOptions['showProgress'] = false;
+        }
+
+        if (isset($options[self::INPUT_KEY_NO_CACHE_CLEAN]) && $options[self::INPUT_KEY_NO_CACHE_CLEAN] === true) {
+            $this->_commandOptions['runCacheClean'] = false;
+        }
+
+        if (isset($options[self::INPUT_KEY_NO_CACHE_FLUSH]) && $options[self::INPUT_KEY_NO_CACHE_FLUSH] === true) {
+            $this->_commandOptions['runCacheFlush'] = false;
+        }
+
+        if (isset($options[self::INPUT_KEY_NO_CLEAN_URL_KEY]) && $options[self::INPUT_KEY_NO_CLEAN_URL_KEY] === true) {
+            $this->_commandOptions['cleanUrlKey'] = false;
+        }
+
+        if (isset($options[self::INPUT_KEY_CATEGORIES_RANGE])) {
+            $this->_commandOptions['categoriesFilter'] = $this->_generateIdsRangeArray(
+                $options[self::INPUT_KEY_CATEGORIES_RANGE],
+                'category'
+            );
+            $distinctOptionsUsed++;
+        }
+
+        if (isset($options[self::INPUT_KEY_PRODUCTS_RANGE])) {
+            $this->_commandOptions['productsFilter'] = $this->_generateIdsRangeArray(
+                $options[self::INPUT_KEY_PRODUCTS_RANGE],
+                'product'
+            );
+            $distinctOptionsUsed++;
+        }
+
+        if (isset($options[self::INPUT_KEY_CATEGORY_ID])) {
+            $this->_commandOptions['categoryId'] = (int)$options[self::INPUT_KEY_CATEGORY_ID];
+
+            if ($this->_commandOptions['categoryId'] == 0) {
+                $this->_errors[] = __('ERROR: category ID should be greater than 0.');
+            } else {
+                $distinctOptionsUsed++;
+            }
+        }
+
+        if (isset($options[self::INPUT_KEY_PRODUCT_ID])) {
+            $this->_commandOptions['productId'] = (int)$options[self::INPUT_KEY_PRODUCT_ID];
+
+            if ($this->_commandOptions['productId'] == 0) {
+                $this->_errors[] = __('ERROR: product ID should be greater than 0.');
+            } else {
+                $distinctOptionsUsed++;
+            }
+        }
+
+        if ($distinctOptionsUsed > 1) {
+            $this->_errors[] = __(
+                "ERROR: you can use only one of the option (not together):\n'--%o1' or '--%o2' or '--%o3' or '--%o4'.",
+                [
+                    'o1' => self::INPUT_KEY_CATEGORIES_RANGE,
+                    'o2' => self::INPUT_KEY_PRODUCTS_RANGE,
+                    'o3' => self::INPUT_KEY_CATEGORY_ID,
+                    'o4' => self::INPUT_KEY_PRODUCT_ID
+                ]
+            );
+        }
+
+        // get store Id (if was set)
+        $storeId = $this->_input->getArgument(self::INPUT_KEY_STOREID);
+        if (is_null($storeId)) {
+            $storeId = $this->_input->getOption(self::INPUT_KEY_STOREID);
+        }
+
+        // if store ID is not specified the re-generate for all stores
+        if (is_null($storeId)) {
+            $this->_commandOptions['storesList'] = $allStores;
+        }
+        // we will re-generate URL only in this specific store (if it exists)
+        elseif (strlen($storeId) && ctype_digit($storeId)) {
+            if (isset($allStores[$storeId])) {
+                $this->_commandOptions['storesList'] = array(
+                    $storeId => $allStores[$storeId]
+                );
+            } else {
+                $this->_errors[] = __('ERROR: store with this ID not exists.');
+            }
+        }
+        // disaply error if user set some incorrect value
+        else {
+            $this->_errors[] = __('ERROR: store ID should have a integer value.');
+        }
     }
 }
